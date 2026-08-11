@@ -1,0 +1,14 @@
+# IDE
+.idea/
+
+# 构建产物（CLion 默认构建目录 + 通用名）
+cmake-build-debug-visual-studio/
+cmake-build-*/
+build/
+out/
+
+# 编译器产物兜底
+*.exe
+*.obj
+*.ilk
+*.pdb
