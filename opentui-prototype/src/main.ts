@@ -36,7 +36,7 @@ renderer.keyInput.on("keypress", (key: KeyEvent) => {
 // 崩溃根因（TextBuffer is destroyed）：finalizeDestroy 先 emit("destroy") 再销毁组件树，
 // 而 destroy 回调里 client.close() 会把收帧循环的 await 续体排入微任务队列，
 // setImmediate(process.exit(0)) 是宏任务 → 微任务必先执行，续体在组件已销毁后写 UI
-// （listText/statusText 在库内无 isDestroyed 守卫）→ TextBuffer.guard() 抛错。
+// （messageList/statusText 在库内无 isDestroyed 守卫）→ TextBuffer.guard() 抛错。
 // 修复：销毁开始即置 uiDead，销毁后的 UI 写入一律静默跳过，退出由 setImmediate 兜底。
 let uiDead = false;
 renderer.on(CliRenderEvents.DESTROY, () => {
@@ -45,8 +45,14 @@ renderer.on(CliRenderEvents.DESTROY, () => {
     setImmediate(() => process.exit(0));
 });
 
-// 消息列表：真实实例，content 动态更新
-const listText = new TextRenderable(renderer, {content: ""});
+// 消息列表容器: flexDirection column + gap 让气泡纵向排列
+const messageList = new BoxRenderable(renderer, {
+    id: "message-list",
+    flexDirection: "column",
+    gap: 1,
+    flexGrow: 1,
+})
+
 const scroll = new ScrollBoxRenderable(renderer, {
     stickyScroll: true,
     stickyStart: "bottom",
@@ -55,13 +61,13 @@ const scroll = new ScrollBoxRenderable(renderer, {
     borderStyle: "rounded",
     title: ` chat: ${uid} → ${to} `,
 });
-scroll.content.add(listText);
+scroll.content.add(messageList);
 
 const input = new InputBox(renderer, {
     placeholder: "message, Enter to send · Esc to quit\nCtrl+Enter to start a new line",
     flexGrow: 0,
-    backgroundColor: "#1a1a1a",
-    focusedBackgroundColor: "#2a2a2a",
+    // backgroundColor: "#1a1a1a",
+    // focusedBackgroundColor: "#2a2a2a",
 
     // Textarea 默认键位：return→newline（回车换行）；submit 默认只挂 meta+return。
     // 这里把 Ctrl+Enter（含数字键盘 Enter）绑到 submit，Enter 发送。
@@ -91,7 +97,7 @@ const input = new InputBox(renderer, {
         const content = input.plainText.trim();
         if (content.length === 0) return;
         if (!client.connected) {
-            appendLine("[system] not connected");
+            appendLine("[system] not connected", false);
             return;
         }
         const msgId = `tui-${Date.now().toString(16)}-${seq++}`;
@@ -105,10 +111,10 @@ const input = new InputBox(renderer, {
             content_: content,
         });
         if (ok) {
-            appendLine(`(self) ${content}`); // 发送即显示，不等待服务端回显
+            addMessage(content, true); // 发送即显示，不等待服务端回显
         } else {
             pending.delete(msgId);
-            appendLine("[system] send failed");
+            appendLine("[system] send failed", true);
         }
         input.clear();
     },
@@ -139,12 +145,44 @@ const messages: string[] = [];
 const pending = new Set<string>(); // 已发送待确认的 msg_id
 let seq = 0;
 
-function appendLine(line: string): void {
+// 气泡: Box 宽度默认 "auto" -> Yoga 按 Text 内容自动测量宽度,
+// maxWidth 封顶 + wrapMode: "word" 自动换行,
+// alignSelf 控制左右对齐 (cross axis: 水平方向)
+function addMessage(content: string, mine: boolean) {
     if (uiDead) return; // 组件树已销毁：跳过写入，避免 TextBuffer.guard() 崩溃
-    messages.push(line);
-    if (messages.length > 500) messages.shift();
-    listText.content = messages.join("\n");
+    const bubble = new BoxRenderable(renderer, {
+        id: `bubble-${content.slice(0, 8)}-${Math.random().toString(36).slice(2, 6)}`,
+        border: true,
+        borderStyle: "rounded",
+        paddingLeft: 1,
+        paddingRight: 1,
+        paddingTop: 0,
+        paddingBottom: 0,
+        maxWidth: 40,
+        alignSelf: mine ? "flex-end" : "flex-start",
+    })
+    bubble.add(new TextRenderable(renderer, { content, wrapMode: "word" }))
+    messageList.add(bubble) // 逐个 add —— add(obj, index?) 只收一个 child
 }
+
+function appendLine(content: string , isError: boolean): void {
+    if (uiDead) return; // 组件树已销毁：跳过写入，避免 TextBuffer.guard() 崩溃
+//     messages.push(line);
+//     if (messages.length > 500) messages.shift();
+//     messageList.content = messages.join("\n");
+    const bubble = new BoxRenderable(renderer, {
+        id: `bubble-${content.slice(0, 8)}-${Math.random().toString(36).slice(2, 6)}`,
+        paddingLeft: 1,
+        paddingRight: 1,
+        paddingTop: 0,
+        paddingBottom: 0,
+        maxWidth: "auto",
+        alignSelf: "center",
+    })
+    bubble.add(new TextRenderable(renderer, { content, wrapMode: "word", fg: isError ? "#7e2121" : "#7a7a7a" }))
+    messageList.add(bubble) // 逐个 add —— add(obj, index?) 只收一个 child
+}
+
 
 // statusText 唯一写入口：销毁后静默跳过（appendLine 的 guard 拦不住这一处，需单独收口）
 function setStatus(text: string): void {
@@ -161,7 +199,7 @@ function handleFrame(frame: DecodeResult & { kind: "ok" }): void {
             if (pending.has(id)) {
                 pending.delete(id);
                 if (frame.status === 0) break;
-                appendLine(`→ failed`);
+                appendLine(`failed`, true);
             }
             break;
         }
@@ -169,11 +207,11 @@ function handleFrame(frame: DecodeResult & { kind: "ok" }): void {
         : {
             // 自己消息的服务端回显副本：发送时已本地显示，跳过；否则正常显示
             if (frame.msg.from_uid_ === uid && pending.has(frame.msg.client_msg_id_)) break;
-            appendLine(`[${frame.msg.from_uid_}] ${frame.msg.content_}`);
+            addMessage(frame.msg.content_, false);
             break;
         }
         default:
-            appendLine(`[inbound] opcode=${frame.opcode} status=${frame.status} id=${frame.msg.client_msg_id_}`);
+            appendLine(`[inbound] opcode=${frame.opcode} status=${frame.status} id=${frame.msg.client_msg_id_}`, true);
     }
 }
 
@@ -181,15 +219,15 @@ function handleFrame(frame: DecodeResult & { kind: "ok" }): void {
 const client = new ChatClient({hostname: host, port, uid, credential: passwd});
 try {
     await client.connect();
-    appendLine(`[system] connected to ${host}:${port}`);
+    appendLine(`[system] connected to ${host}:${port}`, false);
 } catch (e) {
-    appendLine(`[system] connect failed: ${(e as Error).message}`);
+    appendLine(`[system] connect failed: ${(e as Error).message}`, true);
     setStatus("disconnected");
     process.exitCode = 1;
 }
 if (client.connected) {
     if (await client.login()) {
-        appendLine(`[system] logged in as ${uid}`);
+        appendLine(`[system] logged in as ${uid}`, false);
         setStatus(`connected · to: ${to}`);
         // 收帧循环：帧到达立即刷新列表（真实实例 content 更新自动触发重渲染）
         (async () => {
@@ -198,11 +236,11 @@ if (client.connected) {
                 if (frame === null) continue;
                 handleFrame(frame);
             }
-            appendLine("[system] connection closed");
+            appendLine("[system] connection closed", false);
             setStatus("disconnected");
         })();
     } else {
-        appendLine("[system] login failed");
+        appendLine("[system] login failed", true);
         setStatus("login failed");
     }
 }
