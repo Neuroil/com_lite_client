@@ -5,14 +5,15 @@
 import {
     BoxRenderable,
     CliRenderEvents,
-    InputRenderable,
-    InputRenderableEvents,
+    RGBA,
     ScrollBoxRenderable,
     TextRenderable,
+    VRenderable,
     createCliRenderer, KeyEvent, TextareaRenderable,
 } from "@opentui/core";
 import {ChatClient} from "./client.ts";
 import type {DecodeResult} from "./protocol.ts";
+import {InputBox} from "./input_box.ts";
 
 const [uid, passwd, to = uid, host = "129.211.215.72", portStr = "7891"] = process.argv.slice(2);
 if (!uid || !passwd) {
@@ -47,6 +48,7 @@ renderer.on(CliRenderEvents.DESTROY, () => {
 // 消息列表：真实实例，content 动态更新
 const listText = new TextRenderable(renderer, {content: ""});
 const scroll = new ScrollBoxRenderable(renderer, {
+    stickyScroll: true,
     stickyStart: "bottom",
     scrollY: true,
     flexGrow: 1,
@@ -55,27 +57,70 @@ const scroll = new ScrollBoxRenderable(renderer, {
 });
 scroll.content.add(listText);
 
-const input = new TextareaRenderable(renderer, {
+const input = new InputBox(renderer, {
     placeholder: "message, Enter to send · Esc to quit\nCtrl+Enter to start a new line",
     flexGrow: 0,
     backgroundColor: "#1a1a1a",
     focusedBackgroundColor: "#2a2a2a",
-    // 默认键位里 return 是 newline（被 Input 吞掉），提交要 meta+return；
-    // 这里把 return 绑到 submit，恢复"回车即发送"
+
+    // Textarea 默认键位：return→newline（回车换行）；submit 默认只挂 meta+return。
+    // 这里把 Ctrl+Enter（含数字键盘 Enter）绑到 submit，Enter 发送。
     keyBindings: [
-        {name: "return", action: "submit"},
-        {name: "kpenter", shift: false, action: "submit"},
+        {name: "return", ctrl: false, action: "submit"},
+        {name: "kpenter", ctrl: false, action: "submit"},
+        {name: "return", ctrl: true, action: "newline"},
         {name: "backspace", action: "backspace"},
         {name: "left", action: "move-left"},
         {name: "right", action: "move-right"},
         {name: "delete", action: "delete"},
-        {name: "up", action: "line-home"},
-        {name: "down", action: "line-end"},
+        {name: "up", ctrl:true, action: "line-home"},
+        {name: "down", ctrl: true, action: "line-end"},
+        {name: "left", ctrl:true, shift: true, action: "select-left"},
+        {name: "right", ctrl: true, shift: true, action: "select-right"},
+        {name: "up", action: "move-up"},
+        {name: "down", action: "move-down"},
+        {name: "a", ctrl: true, action: "select-all"},
+        {name: "x", ctrl: true, action: "delete"},
         {name: "z", ctrl: true, action: "undo"},
         {name: "y", ctrl: true, action: "redo"},
     ],
+    // 发送：Ctrl+Enter → 本地立即显示 + 发帧（Textarea 的 submit 只调 onSubmit，
+    // 不提供事件，文本从 plainText 取；空/空白不发送；发送后 clear() 清空输入框）
+    onSubmit: () => {
+        if (uiDead) return; // 防御性收口：销毁后不再发帧（与现有防御一致）
+        const content = input.plainText.trim();
+        if (content.length === 0) return;
+        if (!client.connected) {
+            appendLine("[system] not connected");
+            return;
+        }
+        const msgId = `tui-${Date.now().toString(16)}-${seq++}`;
+        pending.add(msgId);
+        const ok = client.send(1 /* request */, 0 /* ok */, {
+            from_uid_: uid,
+            to_uid_: to,
+            chat_type_: 0 /* single */,
+            client_msg_id_: msgId,
+            msg_type_: 0 /* text */,
+            content_: content,
+        });
+        if (ok) {
+            appendLine(`(self) ${content}`); // 发送即显示，不等待服务端回显
+        } else {
+            pending.delete(msgId);
+            appendLine("[system] send failed");
+        }
+        input.clear();
+    },
 });
-const statusText = new TextRenderable(renderer, {content: "connecting...", fg: "#888888"});
+let statusTextContent = "connecting...";
+const statusTextColor = RGBA.fromHex("#888888");
+const statusText = new VRenderable(renderer, {
+    height: 1,
+    render: (buffer, _deltaTime, renderable) => {
+        buffer.drawText(statusTextContent, renderable.screenX, renderable.screenY, statusTextColor);
+    },
+});
 
 const rootBox = new BoxRenderable(renderer, {
     flexDirection: "column",
@@ -89,14 +134,6 @@ rootBox.add(input);
 rootBox.add(statusText);
 renderer.root.add(rootBox);
 input.focus();
-
-// 全局兜底：return 键直接触发提交（Input 内部 keybinding 在此版本未按预期生效）
-renderer.keyInput.on("keypress", (k: { name?: string }) => {
-    if (uiDead) return; // 防御性收口：组件树已销毁后 Input 不可达，但同一防御哲学应保持一致
-    if (k.name === "return" && input.value.length > 0) {
-        input.submit();
-    }
-});
 
 const messages: string[] = [];
 const pending = new Set<string>(); // 已发送待确认的 msg_id
@@ -112,7 +149,8 @@ function appendLine(line: string): void {
 // statusText 唯一写入口：销毁后静默跳过（appendLine 的 guard 拦不住这一处，需单独收口）
 function setStatus(text: string): void {
     if (uiDead) return;
-    statusText.content = text;
+    statusTextContent = text;
+    statusText.requestRender();
 }
 
 function handleFrame(frame: DecodeResult & { kind: "ok" }): void {
@@ -168,31 +206,3 @@ if (client.connected) {
         setStatus("login failed");
     }
 }
-
-// 发送：Enter → 本地立即显示 + 发帧
-input.on(InputRenderableEvents.ENTER, (value: string) => {
-    if (uiDead) return; // 防御性收口：销毁后进入此处会写 input.value，单线程下不可达但同一哲学应一致
-    const content = value.trim();
-    if (content.length === 0) return;
-    if (!client.connected) {
-        appendLine("[system] not connected");
-        return;
-    }
-    const msgId = `tui-${Date.now().toString(16)}-${seq++}`;
-    pending.add(msgId);
-    const ok = client.send(1 /* request */, 0 /* ok */, {
-        from_uid_: uid,
-        to_uid_: to,
-        chat_type_: 0 /* single */,
-        client_msg_id_: msgId,
-        msg_type_: 0 /* text */,
-        content_: content,
-    });
-    if (ok) {
-        appendLine(`(self) ${content}`); // 发送即显示，不等待服务端回显
-    } else {
-        pending.delete(msgId);
-        appendLine("[system] send failed");
-    }
-    input.value = "";
-});
