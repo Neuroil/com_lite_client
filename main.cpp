@@ -54,7 +54,7 @@ int main() {
 
     sockaddr_in service{};
     service.sin_family = AF_INET;
-    inet_pton(AF_INET, kServerAddress, &service.sin_addr);
+    inet_pton(AF_INET, /*kServerAddress*/"127.0.0.1", &service.sin_addr);
     service.sin_port = htons(kServerPort);
 
     result = connect(fd, reinterpret_cast<SOCKADDR*>(&service), sizeof(service));

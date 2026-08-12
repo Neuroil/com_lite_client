@@ -375,7 +375,7 @@ inline void drain_inbound(InboundQueue& q, PendingMap& pending, const std::strin
         const Message& msg = rmp.msg_;
         switch (rmp.fh_.opcode_) {
             case types::Opcode::response: {
-                PendingMap::iterator it = pending.find(msg.client_msg_id_);
+                auto it = pending.find(msg.client_msg_id_);
                 if (it != pending.end()) {
                     const bool delivered = rmp.fh_.status_ == types::Status::ok;
                     std::cout << "→ to: " << it->second.to_uid
