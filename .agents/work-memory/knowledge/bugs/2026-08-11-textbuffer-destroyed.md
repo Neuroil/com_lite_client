@@ -1,17 +1,17 @@
 ---
 id: 2026-08-11-textbuffer-destroyed
-symptom: OpenTUI 客户端 Ctrl+C 退出时必现崩溃 "TextBuffer is destroyed"
+symptom: OpenTUI 客户端 Esc 退出时必现崩溃 "TextBuffer is destroyed"
 affected_systems: [opentui-prototype]
 from_task: -
 fixed: 2026-08-11
 verified: yes
 ---
 
-# OpenTUI Ctrl+C 退出崩溃：微任务续体写入已销毁的 TextBuffer
+# OpenTUI Esc 退出崩溃：微任务续体写入已销毁的 TextBuffer
 
 ## 症状
 
-opentui-prototype（bun 1.3.14 + @opentui/core 0.5.1，Windows 11）：Ctrl+C 退出时**必现**崩溃，异常 `TextBuffer is destroyed`（TextBuffer.guard 在 `_destroyed` 时 throw）。崩溃发生在退出流程中，进程以 exit 1 终止（非干净退出）。
+opentui-prototype（bun 1.3.14 + @opentui/core 0.5.1，Windows 11）：Esc 退出时**必现**崩溃，异常 `TextBuffer is destroyed`（TextBuffer.guard 在 `_destroyed` 时 throw）。崩溃发生在退出流程中，进程以 exit 1 终止（非干净退出）。
 
 ## 调用堆栈（代表性）
 
@@ -30,7 +30,7 @@ error: TextBuffer is destroyed
 - **finalizeDestroy 顺序**：`cleanupBeforeDestroy()` → `emit("destroy")` → `root.destroyRecursively()`（TextBuffer.destroy 置 `_destroyed=true`）→ native 清理。`emit("destroy")` 与组件销毁在同一同步栈内。
 - **DESTROY 回调（应用层）**：`client.close()` 同步执行，`rejectAll()` 把收帧循环 `nextFrame()` 的 await 续体以 resolve(null) 排入**微任务队列**；`setImmediate(process.exit(0))` 排入**宏任务队列**。
 - **微任务先于宏任务**：同步栈结束后微任务先 drain，`process.exit` 永远轮不到——崩溃抢先于退出。
-- **Ctrl+C 入口**：keypress `c+ctrl` → `process.nextTick(() => this.destroy())`（nextTick 队列先于 promise 微任务 drain，时序不变）。
+- **Esc 入口**：keypress `c+ctrl` → `process.nextTick(() => this.destroy())`（nextTick 队列先于 promise 微任务 drain，时序不变）。
 
 ## 静态可疑点
 
@@ -42,7 +42,7 @@ error: TextBuffer is destroyed
 
 | 步 | 事件 | 微任务队列 | 宏任务队列 |
 |---|---|---|---|
-| 1 | stdin data：Ctrl+C keypress，`nextTick(destroy)` 入队 | — | — |
+| 1 | stdin data：Esc keypress，`nextTick(destroy)` 入队 | — | — |
 | 2 | nextTick drain：`destroy()` → `finalizeDestroy()` | — | — |
 | 3 | `cleanupBeforeDestroy()`：移除 uncaughtException/unhandledRejection 兜底、pause stdin | — | — |
 | 4 | `emit("destroy")` → main.ts:30 `client.close()`：rejectAll → resolve(null) | **[1] 收帧循环续体** | — |
@@ -53,7 +53,7 @@ error: TextBuffer is destroyed
 | 9 | `appendLine("connection closed")` → content setter（无守卫）→ `setStyledText` → **guard throw** | — | [A] |
 | 10 | unhandled rejection → Bun 默认终止（exit 1） | — | [A] 永不执行 |
 
-其他 destroy 后写 UI 路径检查：ENTER 回调不可达（库的 keypressHandler 首行 `if (this._isDestroyed) return`，stdin 已 pause）；handleFrame/onData 在 close 后无数据源；渲染循环本身带 isDestroyed 检查。login 窗口内 Ctrl+C 走同款崩溃（同源变体，由守卫一并覆盖）。
+其他 destroy 后写 UI 路径检查：ENTER 回调不可达（库的 keypressHandler 首行 `if (this._isDestroyed) return`，stdin 已 pause）；handleFrame/onData 在 close 后无数据源；渲染循环本身带 isDestroyed 检查。login 窗口内 Esc 走同款崩溃（同源变体，由守卫一并覆盖）。
 
 ## 根因
 
@@ -64,9 +64,9 @@ DESTROY 回调把进程退出推迟到宏任务（setImmediate），但 `client.
 ## 修复
 
 - `src/main.ts`：模块级 `let uiDead = false`；DESTROY 回调置 `uiDead = true`（保留 `client.close()` + `setImmediate(process.exit(0))`）；`appendLine` 开头 `if (uiDead) return;`；新增 `setStatus(text)` 收口（内部 `if (uiDead) return; statusText.content = text;`），替换全部 4 处 `statusText.content = ...` 写入。
-- `src/client.ts`：实例级 `private closed = false`；`close()` 开头置 `closed = true`；`connect()` 的 await 续体检查 `closed`，已关闭则 `socket.end()` 并 return（堵僵尸连接：Ctrl+C 时 Bun.connect 微任务续体可能先于 setImmediate 执行并复活 this.socket）。
+- `src/client.ts`：实例级 `private closed = false`；`close()` 开头置 `closed = true`；`connect()` 的 await 续体检查 `closed`，已关闭则 `socket.end()` 并 return（堵僵尸连接：Esc 时 Bun.connect 微任务续体可能先于 setImmediate 执行并复活 this.socket）。
 - `src/main.ts`：keypress 全局回调与 ENTER 回调开头补 `if (uiDead) return;`（防御性收口）。
-- 相关测试 / 验证方式：启动 → 登录 → 发消息（功能正常）→ 一次 Ctrl+C → 进程 exit 0 干净退出、无崩溃、终端恢复。修复前必现崩溃，修复后多次验证不复现。
+- 相关测试 / 验证方式：启动 → 登录 → 发消息（功能正常）→ 一次 Esc → 进程 exit 0 干净退出、无崩溃、终端恢复。修复前必现崩溃，修复后多次验证不复现。
 - 横向搜索结果（lateral-search）：similar_problems=4（1 真实同模式：client.ts connect 僵尸连接，已修；1 防御缺口：input 写入未过守卫，已修；2 提示级 C++ 侧，不属本 bug 同类，未动）。C++ 侧无「销毁后访问」同类风险（ocp#2/ocp#7 结构规避）。
 - 网络查证（network-research）：
   - **PR #882**（anomalyco/opentui，merged 2026-06-25）"fix(core): guard lifecycle passes loop against destroyed renderables"——官方对 "TextBuffer is destroyed" 的唯一合并修复，只改生命周期循环，**未覆盖 set content 路径**（0.5.1 发布于 8-04，晚于该 PR，故我们命中的路径仍无守卫）。

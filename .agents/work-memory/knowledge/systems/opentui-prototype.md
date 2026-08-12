@@ -27,7 +27,7 @@ bun src/smoke.ts <uid> <passwd> [host] [port]        # 冒烟
 
 - **工厂函数 vs 实例 API**：`Text()/Box()/Input()` 工厂返回 ProxiedVNode（声明式 vnode 代理），属性赋值（`t.content = "x"`）**静默无效**；动态更新必须 `new TextRenderable(renderer, opts)` 拿真实实例。静态布局可用工厂。
 - **Input 回车默认不提交**：0.5.1 默认键位 `return → newline`（单行 Input 吞掉），提交要 `meta+return`（文档与实现不符）；解法：自定义 keyBindings 或全局 `keypress` 里 `input.submit()`（本原型用后者）。
-- **Ctrl+C 退出兜底**：`exitOnCtrlC` 只销毁渲染器不退出进程（上游 issue #1355）；DESTROY 事件里 `client.close()` + `setImmediate(() => process.exit(0))` 兜底，且所有 UI 写入（appendLine/setStatus）过 `uiDead` 守卫（来自 bugs/2026-08-11-textbuffer-destroyed.md）。
+- **Esc 退出兜底**：`exitOnCtrlC` 只销毁渲染器不退出进程（上游 issue #1355）；DESTROY 事件里 `client.close()` + `setImmediate(() => process.exit(0))` 兜底，且所有 UI 写入（appendLine/setStatus）过 `uiDead` 守卫（来自 bugs/2026-08-11-textbuffer-destroyed.md）。
 - **渲染调度**：实例 API 下动态更新正常（初始渲染 + content setter 触发重渲染）；早期"渲染静止"现象是 vnode 赋值无效所致，非渲染器问题。
 - **协议层长度语义必须是 UTF-8 字节**：JS `string.length` 是 UTF-16 码元（中文 1 码元=3 字节），写 body_len / 分配缓冲 / 65530 校验一律先 `TextEncoder().encode()` 拿字节数组（来自 bugs/2026-08-11-chinese-message-blocks.md）；`encodeInto` 返回值不检查会静默截断。
 - 打包单文件 exe（`bun build --compile`）是否兼容 @opentui/core 的 native 模块**未验证**。
