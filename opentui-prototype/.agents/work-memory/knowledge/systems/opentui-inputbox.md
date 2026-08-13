@@ -4,15 +4,15 @@
 任务：2026-08-12-inputbox-clipboard（方向 B：Ctrl+C 复制 / Ctrl+X 剪切 / 粘贴原生）。
 环境：TS + Bun + @opentui/core@0.5.1，Windows 11 + Windows Terminal。
 
-## 组件契约（src/input_box.ts，33 行）
+## 组件契约（src/input_area.ts，33 行）
 
-`handleKeyPress(key): boolean` 覆写（input_box.ts:5），判定顺序：
+`handleKeyPress(key): boolean` 覆写（input_area.ts:5），判定顺序：
 
-1. `traits.suspend === true` → 直接 `super.handleKeyPress`（input_box.ts:7-9）。
+1. `traits.suspend === true` → 直接 `super.handleKeyPress`（input_area.ts:7-9）。
 2. `key.ctrl && !meta && !super && !hyper && hasSelection()` 时：
-   - `name === "c"` → `copyToClipboardOSC52(getSelectedText())`，return true（选区保留，input_box.ts:12-16）。
-   - `name === "x"` → 复制成功才 `deleteSelection()`；失败保选区；两种情况都 return true（不让 super 看见，input_box.ts:17-23）。
-3. 其余（含无选区）→ `super.handleKeyPress(key)`（input_box.ts:26）。
+   - `name === "c"` → `copyToClipboardOSC52(getSelectedText())`，return true（选区保留，input_area.ts:12-16）。
+   - `name === "x"` → 复制成功才 `deleteSelection()`；失败保选区；两种情况都 return true（不让 super 看见，input_area.ts:17-23）。
+3. 其余（含无选区）→ `super.handleKeyPress(key)`（input_area.ts:26）。
 
 注意：**无选区 Ctrl+X 组件不处理**，回退后由宿主应用键位表兜底——本项目 main.ts:83 `{name:"x", ctrl:true, action:"delete"}`（任务前用户配置）。
 

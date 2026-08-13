@@ -13,7 +13,7 @@ import {
 } from "@opentui/core";
 import {ChatClient} from "./client.ts";
 import type {DecodeResult} from "./protocol.ts";
-import {InputBox} from "./input_box.ts";
+import {InputArea} from "./input_area.ts";
 
 const [uid, passwd, to = uid, host = "129.211.215.72", portStr = "7891"] = process.argv.slice(2);
 if (!uid || !passwd) {
@@ -63,7 +63,11 @@ const scroll = new ScrollBoxRenderable(renderer, {
 });
 scroll.content.add(messageList);
 
-const input = new InputBox(renderer, {
+const input = new InputArea(renderer, {
+
+    minHeight: 2,
+    paddingTop: 1,
+    paddingBottom: 0,
     placeholder: "message, Enter to send · Esc to quit\nCtrl+Enter to start a new line",
     flexGrow: 0,
     // backgroundColor: "#1a1a1a",
@@ -119,6 +123,19 @@ const input = new InputBox(renderer, {
         input.clear();
     },
 });
+
+const input_box = new BoxRenderable(renderer, {
+    minHeight: 4,
+    border: true,
+    borderStyle: "rounded",
+    paddingTop: 0,
+    paddingBottom: 0,
+    paddingLeft: 1,
+    paddingRight: 1,
+});
+
+input_box.add(input);
+
 let statusTextContent = "connecting...";
 const statusTextColor = RGBA.fromHex("#888888");
 const statusText = new VRenderable(renderer, {
@@ -136,7 +153,7 @@ const rootBox = new BoxRenderable(renderer, {
     gap: 1,
 });
 rootBox.add(scroll);
-rootBox.add(input);
+rootBox.add(input_box);
 rootBox.add(statusText);
 renderer.root.add(rootBox);
 input.focus();

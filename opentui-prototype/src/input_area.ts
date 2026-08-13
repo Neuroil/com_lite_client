@@ -1,6 +1,6 @@
 import {TextareaRenderable, type CliRenderer, type KeyEvent} from "@opentui/core";
 
-export class InputBox extends TextareaRenderable {
+export class InputArea extends TextareaRenderable {
     override handleKeyPress(key: KeyEvent): boolean {
         // Upstream contract: traits.suspend===true skips all key-binding actions (index.bun.js:8384).
         if (this.traits.suspend === true) {
